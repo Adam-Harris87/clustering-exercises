@@ -3,63 +3,24 @@ import pandas as pd
 import os
 import env
 
-def acquire_zillow():
-    '''
-    This function will retrieve zillow home data for 2017 properties. It will only get
-    single family residential properties. the function will attempt to open the data from 
-    a local csv file, if one is not found, it will download the data from the codeup
-    database. An env file is needed in the local directory in order to run this file.
-    '''
-    if os.path.exists('zillow_2017.csv'):
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+
+def acquire_mall_customers():
+    file = 'mall_customers.csv'
+    if os.path.exists(file):
+        # check if local csv file of the data exists
         print('opening data from local file')
-        df = pd.read_csv('zillow_2017.csv', index_col=0)
+        df = pd.read_csv(file, index_col=0)
     else:
-        # run sql query and write to csv
+        # retrieve data from sql
         print('local file not found')
-        print('retrieving data from sql server')
-        query = '''
-SELECT *
-FROM properties_2017
-JOIN predictions_2017
-	USING (parcelid)
-LEFT JOIN airconditioningtype
-	USING (airconditioningtypeid)
-LEFT JOIN architecturalstyletype
-	USING (architecturalstyletypeid)
-LEFT JOIN buildingclasstype
-	USING (buildingclasstypeid)
-LEFT JOIN heatingorsystemtype
-	USING (heatingorsystemtypeid)
-LEFT JOIN propertylandusetype
-	USING (propertylandusetypeid)
-LEFT JOIN storytype
-	USING (storytypeid)
-LEFT JOIN typeconstructiontype
-	USING (typeconstructiontypeid)
-WHERE latitude IS NOT NULL
-	AND longitude IS NOT NULL
-    AND parcelid IN (
-		SELECT parcelid FROM unique_properties)
-;
-        '''
-        connection = env.get_db_url('zillow')
+        print('retrieving data via SQL connection')
+        query = 'SELECT * FROM customers;'
+        connection = env.get_db_url('mall_customers')
         df = pd.read_sql(query, connection)
-        df.to_csv('zillow_2017.csv')
-    
-    # renaming column names to one's I like better
-    df = df.rename(columns = {'bedroomcnt':'bedrooms', 
-                              'bathroomcnt':'bathrooms', 
-                              'calculatedfinishedsquarefeet':'area',
-                              'garagecarcnt':'cars_garage',
-                              'garagetotalsqft':'garage_sqft',
-                              'lotsizesquarefeet':'lot_size',
-                              'poolcnt':'pools',
-                              'regionidcity':'region',
-                              'yearbuilt':'year_built',
-                              'taxvaluedollarcnt':'tax_value'
-                              })
-    
-    df = df.drop(columns='id')
+        df.to_csv(file)
+        
     return df
 
 def nulls_by_col(df):
@@ -125,21 +86,65 @@ def summarize(df):
     print(nulls_by_row(df))
     print('=====================================================')
 
-def get_single_unit(df):
-    homes = ((df.propertylandusedesc =='Single Family Residential') |
-            (df.propertylandusedesc == 'Mobile Home') |
-            (df.propertylandusedesc =='Manufactured, Modular, Prefabricated Homes'))
-    df = df[homes]
+def detect_outliers(df, cols, k=1.5):
+    '''
+    This function takes in a dataframe, column, and k
+    to detect and handle outlier using IQR rule
+    '''
+    for col in df[cols]:
+        q1 = df[col].quantile(0.25)
+        q3 = df[col].quantile(0.75)
+        iqr = q3 - q1
+        upper_bound =  q3 + k * iqr
+        lower_bound =  q1 - k * iqr     
+        df = df[(df[col] > upper_bound) | (df[col] < lower_bound)]
     return df
 
-def handle_missing_values(df, prop_required_columns=0.5, prop_required_rows=0.75):
-    '''
-    This function takes in a dataframe, the percent of columns and rows
-    that need to have values/non-nulls
-    and returns the dataframe with the desired amount of nulls left.
-    '''
-    column_threshold = int(round(prop_required_columns * len(df.index), 0))
-    df = df.dropna(axis=1, thresh=column_threshold)
-    row_threshold = int(round(prop_required_rows * len(df.columns), 0))
-    df = df.dropna(axis=0, thresh=row_threshold)
+def encode_dummies(df):
+    df = pd.get_dummies(df, columns=['gender'])
     return df
+
+
+def split_data(df):
+    train_val, test = train_test_split(df, train_size=0.8, random_state=123)
+    train, validate = train_test_split(train_val, train_size=0.7, random_state=123)
+    return train, validate, test
+
+def scale_data(train, 
+               validate, 
+               test, 
+               columns_to_scale,
+               scaler=MinMaxScaler(),
+               return_scaler=False):
+    '''
+    Scales the 3 data splits. 
+    Takes in train, validate, and test data splits and returns their scaled counterparts.
+    If return_scalar is True, the scaler object will be returned as well
+    '''
+    # make copies of our original data so we dont gronk up anything
+    train_scaled = train.copy()
+    validate_scaled = validate.copy()
+    test_scaled = test.copy()
+    
+    #     fit the thing
+    scaler.fit(train[columns_to_scale])
+    # applying the scaler:
+    train_scaled[columns_to_scale] = pd.DataFrame(
+        scaler.transform(train[columns_to_scale]),
+        columns=train[columns_to_scale].columns.values, 
+        index = train.index)
+                                                  
+    validate_scaled[columns_to_scale] = pd.DataFrame(
+        scaler.transform(validate[columns_to_scale]),
+        columns=validate[columns_to_scale].columns.values).set_index(
+        [validate.index.values])
+    
+    test_scaled[columns_to_scale] = pd.DataFrame(
+        scaler.transform(test[columns_to_scale]),
+        columns=test[columns_to_scale].columns.values).set_index(
+        [test.index.values])
+    
+    if return_scaler:
+        return scaler, train_scaled, validate_scaled, test_scaled
+    else:
+        return train_scaled, validate_scaled, test_scaled
