@@ -18,28 +18,35 @@ def acquire_zillow():
         print('local file not found')
         print('retrieving data from sql server')
         query = '''
-SELECT *
-FROM properties_2017
-JOIN predictions_2017
-	USING (parcelid)
-LEFT JOIN airconditioningtype
-	USING (airconditioningtypeid)
-LEFT JOIN architecturalstyletype
-	USING (architecturalstyletypeid)
-LEFT JOIN buildingclasstype
-	USING (buildingclasstypeid)
-LEFT JOIN heatingorsystemtype
-	USING (heatingorsystemtypeid)
-LEFT JOIN propertylandusetype
-	USING (propertylandusetypeid)
-LEFT JOIN storytype
-	USING (storytypeid)
-LEFT JOIN typeconstructiontype
-	USING (typeconstructiontypeid)
-WHERE latitude IS NOT NULL
-	AND longitude IS NOT NULL
-    AND parcelid IN (
-		SELECT parcelid FROM unique_properties)
+SELECT
+    prop.*,
+    predictions_2017.logerror,
+    predictions_2017.transactiondate,
+    air.airconditioningdesc,
+    arch.architecturalstyledesc,
+    build.buildingclassdesc,
+    heat.heatingorsystemdesc,
+    landuse.propertylandusedesc,
+    story.storydesc,
+    construct.typeconstructiondesc
+FROM properties_2017 prop
+JOIN (
+    SELECT parcelid, MAX(transactiondate) AS max_transactiondate
+    FROM predictions_2017
+    GROUP BY parcelid
+) pred USING(parcelid)
+JOIN predictions_2017 ON pred.parcelid = predictions_2017.parcelid
+                      AND pred.max_transactiondate = predictions_2017.transactiondate
+LEFT JOIN airconditioningtype air USING (airconditioningtypeid)
+LEFT JOIN architecturalstyletype arch USING (architecturalstyletypeid)
+LEFT JOIN buildingclasstype build USING (buildingclasstypeid)
+LEFT JOIN heatingorsystemtype heat USING (heatingorsystemtypeid)
+LEFT JOIN propertylandusetype landuse USING (propertylandusetypeid)
+LEFT JOIN storytype story USING (storytypeid)
+LEFT JOIN typeconstructiontype construct USING (typeconstructiontypeid)
+WHERE prop.latitude IS NOT NULL
+  AND prop.longitude IS NOT NULL
+  AND transactiondate <= '2017-12-31'
 ;
         '''
         connection = env.get_db_url('zillow')
@@ -59,7 +66,6 @@ WHERE latitude IS NOT NULL
                               'taxvaluedollarcnt':'tax_value'
                               })
     
-    df = df.drop(columns='id')
     return df
 
 def nulls_by_col(df):
@@ -68,11 +74,10 @@ def nulls_by_col(df):
     and finds the number of missing values
     it returns a new dataframe with quantity and percent of missing values
     '''
-    num_missing = df.isnull().sum()
-    rows = df.shape[0]
-    percent_missing = num_missing / rows * 100
-    cols_missing = pd.DataFrame({'num_rows_missing': num_missing, 'percent_rows_missing': percent_missing})
-    return cols_missing.sort_values(by='num_rows_missing', ascending=False)
+    return pd.concat([
+        df.isna().sum().rename('count'),
+        df.isna().mean().rename('percent')
+    ], axis=1)
 
 def nulls_by_row(df):
     '''
@@ -80,13 +85,10 @@ def nulls_by_row(df):
     and finds the number of missing values in a row
     it returns a new dataframe with quantity and percent of missing values
     '''
-    num_missing = df.isnull().sum(axis=1)
-    percent_miss = num_missing / df.shape[1] * 100
-    rows_missing = pd.DataFrame({'num_cols_missing': num_missing, 'percent_cols_missing': percent_miss})
-    rows_missing = df.merge(rows_missing,
-                        left_index=True,
-                        right_index=True)[['num_cols_missing', 'percent_cols_missing']]
-    return rows_missing.sort_values(by='num_cols_missing', ascending=False)
+    return pd.concat([
+        df.isna().sum(axis=1).rename('n_missing'),
+        df.isna().mean(axis=1).rename('percent_missing'),
+    ], axis=1).value_counts().sort_index()
 
 def summarize(df):
     '''
@@ -142,4 +144,29 @@ def handle_missing_values(df, prop_required_columns=0.5, prop_required_rows=0.75
     df = df.dropna(axis=1, thresh=column_threshold)
     row_threshold = int(round(prop_required_rows * len(df.columns), 0))
     df = df.dropna(axis=0, thresh=row_threshold)
+    return df
+
+def wrangle_zillow():
+    '''
+    acquires, gives summary statistics, and handles missing values contingent on
+    the desires of the zillow data we wish to obtain.
+    parameters: none
+    return: single pandas dataframe, df
+    '''
+    # grab the data:
+    df = acquire_zillow()
+    # summarize and peek at the data:
+    summarize(df)
+    nulls_by_col(df).sort_values(by='percent')
+    nulls_by_row(df)
+    # task for you to decide: ;)
+    # determine what you want to categorize as a single unit property.
+    # maybe use df.propertylandusedesc.unique() to get a list, narrow it down with domain knowledge,
+    # then pull something like this:
+    # df.propertylandusedesc = df.propertylandusedesc.apply(lambda x: x if x in my_list_of_single_unit_types else np.nan)
+    # In our second iteration, we will tune the proportion and e:
+    df = handle_missing_values(df, prop_required_columns=.5, prop_required_rows=.5)
+    # take care of any duplicates:
+    df = df.drop_duplicates()
+    df= get_single_unit(df)
     return df

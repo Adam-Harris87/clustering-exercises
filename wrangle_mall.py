@@ -113,7 +113,7 @@ def split_data(df):
 def scale_data(train, 
                validate, 
                test, 
-               columns_to_scale,
+               columns_to_scale=['age', 'spending_score', 'annual_income'],
                scaler=MinMaxScaler(),
                return_scaler=False):
     '''
