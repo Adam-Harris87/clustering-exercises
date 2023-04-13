@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import os
 import env
+from sklearn.model_selection import train_test_split
 
 def acquire_zillow():
     '''
@@ -134,6 +135,15 @@ def get_single_unit(df):
     df = df[homes]
     return df
 
+def split_data(df, seed=123):
+    '''
+    This function takes in a dataframe and splits the data into train, validate and test. 
+    '''
+    train_validate, test = train_test_split(df, test_size=0.2, random_state=seed)
+    train, validate = train_test_split(train_validate, test_size=0.3, random_state=seed)
+    return train, validate, test
+
+
 def handle_missing_values(df, prop_required_columns=0.5, prop_required_rows=0.75):
     '''
     This function takes in a dataframe, the percent of columns and rows
@@ -163,10 +173,21 @@ def wrangle_zillow():
     # determine what you want to categorize as a single unit property.
     # maybe use df.propertylandusedesc.unique() to get a list, narrow it down with domain knowledge,
     # then pull something like this:
-    # df.propertylandusedesc = df.propertylandusedesc.apply(lambda x: x if x in my_list_of_single_unit_types else np.nan)
+    # df.propertylandusedesc = df.propertylandusedesc.apply(
+    # lambda x: x if x in my_list_of_single_unit_types else np.nan)
     # In our second iteration, we will tune the proportion and e:
-    df = handle_missing_values(df, prop_required_columns=.5, prop_required_rows=.5)
+    df = handle_missing_values(df, prop_required_columns=.1, prop_required_rows=.5)
     # take care of any duplicates:
     df = df.drop_duplicates()
     df= get_single_unit(df)
-    return df
+
+    train, validate, test = split_data(df)
+
+    print(f'df: {df.shape}')
+    print()
+    print(f'train: {train.shape}')
+    print(f'validate: {validate.shape}')
+    print(f'test: {test.shape}')
+    return df, train, validate, test
+
+
